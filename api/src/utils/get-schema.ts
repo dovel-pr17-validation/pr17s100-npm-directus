@@ -1,0 +1,200 @@
+import { useEnv } from '@directus/env';
+import type { SchemaInspector } from '@directus/schema';
+import { createInspector } from '@directus/schema';
+import { isSystemCollection, systemCollectionRows } from '@directus/system-data';
+import type { BaseCollectionMeta, CollectionMeta, Filter, SchemaOverview } from '@directus/types';
+import { parseJSON, toArray, toBoolean } from '@directus/utils';
+import type { Knex } from 'knex';
+import { mapValues } from 'lodash-es';
+import { getMemorySchemaCache, setMemorySchemaCache } from '../cache.js';
+import { ALIAS_TYPES } from '../constants.js';
+import getDatabase from '../database/index.js';
+import { useLogger } from '../logger/index.js';
+import { RelationsService } from '../services/relations.js';
+import getDefaultValue from './get-default-value.js';
+import { getSystemFieldRowsWithAuthProviders } from './get-field-system-rows.js';
+import getLocalType from './get-local-type.js';
+import { runExclusive } from './run-exclusive.js';
+import { TimeoutError } from './with-timeout.js';
+
+const logger = useLogger();
+
+export async function getSchema(options?: {
+	database?: Knex;
+
+	/**
+	 * To bypass any cached schema if bypassCache is enabled.
+	 * Used to ensure schema snapshot/apply is not using outdated schema
+	 */
+	bypassCache?: boolean;
+}): Promise<SchemaOverview> {
+	const env = useEnv();
+
+	if (options?.bypassCache || env['CACHE_SCHEMA'] === false) {
+		const database = options?.database || getDatabase();
+		const schemaInspector = createInspector(database);
+
+		return await getDatabaseSchema(database, schemaInspector);
+	}
+
+	const cached = getMemorySchemaCache();
+
+	if (cached) {
+		return cached;
+	}
+
+	// No retry needed: if the leader dies, a waiting instance takes over once lease ends
+	try {
+		const { result: schema, leader } = await runExclusive(
+			'schema-cache',
+			async () => {
+				const database = options?.database || getDatabase();
+				const schemaInspector = createInspector(database);
+
+				const schema = await getDatabaseSchema(database, schemaInspector);
+
+				// Update the cache so an in-flight run that outlives the timeout
+				// can still serve the schema to the next request.
+				setMemorySchemaCache(schema);
+
+				return schema;
+			},
+			{
+				timeout: env['CACHE_SCHEMA_SYNC_TIMEOUT'] as number,
+			},
+		);
+
+		if (!leader) setMemorySchemaCache(schema);
+
+		return schema;
+	} catch (error) {
+		if (error instanceof TimeoutError) {
+			logger.warn(
+				`Schema retrieval exceeded the timeout. Increase CACHE_SCHEMA_SYNC_TIMEOUT in the env to prevent this from happening.`,
+			);
+		}
+
+		throw error;
+	}
+}
+
+async function getDatabaseSchema(database: Knex, schemaInspector: SchemaInspector): Promise<SchemaOverview> {
+	const env = useEnv();
+
+	const result: SchemaOverview = {
+		collections: {},
+		relations: [],
+	};
+
+	const systemFieldRows = getSystemFieldRowsWithAuthProviders();
+
+	const schemaOverview = await schemaInspector.overview();
+
+	const allCollections = await database.select('*').from('directus_collections');
+
+	const collections: (BaseCollectionMeta & Partial<CollectionMeta>)[] = [...allCollections, ...systemCollectionRows];
+
+	for (const [collection, info] of Object.entries(schemaOverview)) {
+		if (toArray(env['DB_EXCLUDE_TABLES']).includes(collection)) {
+			logger.trace(`Collection "${collection}" is configured to be excluded and will be ignored`);
+			continue;
+		}
+
+		if (!info.primary) {
+			logger.warn(`Collection "${collection}" doesn't have a primary key column and will be ignored`);
+			continue;
+		}
+
+		if (collection.includes(' ')) {
+			logger.warn(`Collection "${collection}" has a space in the name and will be ignored`);
+			continue;
+		}
+
+		const collectionMeta = collections.find((collectionMeta) => collectionMeta.collection === collection);
+
+		const status =
+			!isSystemCollection(collection) && collectionMeta && 'status' in collectionMeta
+				? collectionMeta.status
+				: 'active';
+
+		result.collections[collection] = {
+			collection,
+			primary: info.primary,
+			singleton: toBoolean(collectionMeta?.singleton),
+			note: collectionMeta?.note || null,
+			sortField: collectionMeta?.sort_field || null,
+			accountability: collectionMeta ? collectionMeta.accountability : 'all',
+			status,
+			fields: mapValues(schemaOverview[collection]?.columns, (column) => {
+				return {
+					field: column.column_name,
+					defaultValue: getDefaultValue(column) ?? null,
+					nullable: column.is_nullable ?? true,
+					generated: column.is_generated ?? false,
+					type: getLocalType(column),
+					dbType: column.data_type,
+					precision: column.numeric_precision || null,
+					scale: column.numeric_scale || null,
+					special: [],
+					note: null,
+					validation: null,
+					alias: false,
+					searchable: true,
+				};
+			}),
+		};
+	}
+
+	const fields = [
+		...(await database
+			.select<
+				{
+					id: number;
+					collection: string;
+					field: string;
+					special: string;
+					note: string | null;
+					validation: string | Record<string, any> | null;
+					searchable: boolean;
+				}[]
+			>('id', 'collection', 'field', 'special', 'note', 'validation', 'searchable')
+			.from('directus_fields')),
+		...systemFieldRows,
+	].filter((field) => (field.special ? toArray(field.special) : []).includes('no-data') === false);
+
+	for (const field of fields) {
+		if (!result.collections[field.collection]) continue;
+
+		const existing = result.collections[field.collection]?.fields[field.field];
+		const column = schemaOverview[field.collection]?.columns[field.field];
+		const special = field.special ? toArray(field.special) : [];
+
+		if (ALIAS_TYPES.some((type) => special.includes(type)) === false && !existing) continue;
+
+		const type = (existing && getLocalType(column, { special })) || 'alias';
+		let validation = field.validation ?? null;
+
+		if (validation && typeof validation === 'string') validation = parseJSON(validation);
+
+		result.collections[field.collection]!.fields[field.field] = {
+			field: field.field,
+			defaultValue: existing?.defaultValue ?? null,
+			nullable: existing?.nullable ?? true,
+			generated: existing?.generated ?? false,
+			type: type,
+			dbType: existing?.dbType || null,
+			precision: existing?.precision || null,
+			scale: existing?.scale || null,
+			special: special,
+			note: field.note,
+			alias: existing?.alias ?? true,
+			validation: (validation as Filter) ?? null,
+			searchable: toBoolean(field.searchable) ?? true,
+		};
+	}
+
+	const relationsService = new RelationsService({ knex: database, schema: result });
+	result.relations = await relationsService.readAll(undefined, undefined, true);
+
+	return result;
+}

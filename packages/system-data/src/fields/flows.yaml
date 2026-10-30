@@ -1,0 +1,34 @@
+table: directus_flows
+
+fields:
+  - field: id
+    special:
+      - uuid
+  - field: name
+  - field: icon
+  - field: color
+  - field: description
+  - field: status
+  - field: trigger
+  - field: accountability
+  - field: options
+    special:
+      - cast-json
+  - field: operation
+  - field: operations
+    special:
+      - o2m
+  - field: date_created
+    special:
+      - date-created
+  - field: user_created
+    special:
+      - user-created
+  - field: folder
+    width: half
+    readonly: true
+    special:
+      - m2o
+    display: related-values
+    display_options:
+      template: '{{ name }}'

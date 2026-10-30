@@ -1,0 +1,435 @@
+import type { EventContext } from '@directus/types';
+import type { Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import emitter from '../../emitter.js';
+import { ItemsService, MetaService } from '../../services/index.js';
+import { getSchema } from '../../utils/get-schema.js';
+import type { WebSocketClient } from '../types.js';
+import { ItemsHandler } from './items.js';
+
+// mocking
+vi.mock('../controllers', () => ({
+	getWebSocketController: vi.fn(() => ({
+		clients: new Set(),
+	})),
+}));
+
+vi.mock('../../utils/get-schema', () => ({
+	getSchema: vi.fn(),
+}));
+
+vi.mock('../../database/index');
+
+vi.mock('../../services', () => ({
+	ItemsService: vi.fn(),
+	MetaService: vi.fn(),
+}));
+
+function mockClient() {
+	return {
+		on: vi.fn(),
+		off: vi.fn(),
+		send: vi.fn(),
+		close: vi.fn(),
+		accountability: null,
+	} as unknown as WebSocketClient;
+}
+
+describe('WebSocket heartbeat handler', () => {
+	let handler: ItemsHandler;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		// initialize handler
+		handler = new ItemsHandler();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		emitter.offAll();
+		vi.clearAllMocks();
+	});
+
+	test('ignore other message types', async () => {
+		const spy = vi.spyOn(handler, 'onMessage');
+
+		// receive message
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: mockClient(),
+				message: { type: 'pong' },
+			},
+			{} as EventContext,
+		);
+
+		// expect nothing
+		expect(spy).not.toBeCalled();
+	});
+
+	test('unknown collection should error', async () => {
+		(getSchema as Mock).mockImplementation(() => ({ collections: {} }));
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'create', data: {} },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+
+		// expect error
+		expect(fakeClient.send).toBeCalledWith(
+			'{"type":"items","status":"error","error":{"code":"FORBIDDEN","message":"You don\'t have permission to access collection \\"test\\" or it does not exist. Queried in root."}}',
+		);
+	});
+
+	test('system collection should error', async () => {
+		(getSchema as Mock).mockImplementation(() => ({
+			collections: { directus_users: { collection: 'directus_users', fields: {} } },
+		}));
+
+		const createOne = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { createOne };
+		});
+
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'directus_users', action: 'create', data: {} },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync();
+
+		expect(createOne).not.toBeCalled();
+
+		expect(fakeClient.send).toBeCalledWith(
+			'{"type":"items","status":"error","error":{"code":"INVALID_COLLECTION","message":"Cannot trigger an action on a system collection."}}',
+		);
+	});
+
+	test('create one item', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+
+		const createOne = vi.fn(),
+			readOne = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { createOne, readOne };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'create', data: {} },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(createOne).toBeCalled();
+		expect(readOne).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('create multiple items', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+
+		const createMany = vi.fn(),
+			readMany = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { createMany, readMany };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'create', data: [{}, {}] },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(createMany).toBeCalled();
+		expect(readMany).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('read by query', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+		const readByQuery = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { readByQuery };
+		});
+
+		const getMetaForQuery = vi.fn();
+
+		(MetaService as Mock).mockImplementation(function () {
+			return { getMetaForQuery };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'read', query: {} },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(readByQuery).toBeCalled();
+		expect(getMetaForQuery).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('update one item', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+
+		const updateOne = vi.fn(),
+			readOne = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { updateOne, readOne };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'update', data: {}, id: '123' },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(updateOne).toBeCalled();
+		expect(readOne).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('update multiple items', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+
+		const updateMany = vi.fn(),
+			readMany = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { updateMany, readMany };
+		});
+
+		const getMetaForQuery = vi.fn();
+
+		(MetaService as Mock).mockImplementation(function () {
+			return { getMetaForQuery };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'update', data: {}, ids: ['123', '456'] },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(updateMany).toBeCalled();
+		expect(getMetaForQuery).toBeCalled();
+		expect(readMany).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('batch update multiple items', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+
+		const updateBatch = vi.fn(),
+			readMany = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { updateBatch, readMany };
+		});
+
+		const getMetaForQuery = vi.fn();
+
+		(MetaService as Mock).mockImplementation(function () {
+			return { getMetaForQuery };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'update', data: [{ id: '123' }, { id: '456' }] },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(updateBatch).toBeCalled();
+		expect(getMetaForQuery).toBeCalled();
+		expect(readMany).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('delete one item', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+		const deleteOne = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { deleteOne };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'delete', id: '123' },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(deleteOne).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('delete multiple items by id', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+		const deleteMany = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { deleteMany };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'delete', ids: ['123', 456] },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(deleteMany).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('delete multiple items by query', async () => {
+		// do mocking
+		(getSchema as Mock).mockImplementation(() => ({ collections: { test: [] } }));
+		const deleteByQuery = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { deleteByQuery };
+		});
+
+		// receive message
+		const fakeClient = mockClient();
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'delete', query: {} },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync(); // flush promises to make sure the event is handled
+		// expect service functions
+		expect(deleteByQuery).toBeCalled();
+		expect(fakeClient.send).toBeCalled();
+	});
+
+	test('inactive collection should error', async () => {
+		(getSchema as Mock).mockImplementation(() => ({
+			collections: { test: { collection: 'test', status: 'inactive', fields: {} } },
+		}));
+
+		const createOne = vi.fn();
+
+		(ItemsService as Mock).mockImplementation(function () {
+			return { createOne };
+		});
+
+		const fakeClient = mockClient();
+
+		// An admin is told the collection is inactive without a permission lookup
+		(fakeClient as { accountability: unknown }).accountability = { admin: true, roles: [], user: null };
+
+		emitter.emitAction(
+			'websocket.message',
+			{
+				client: fakeClient,
+				message: { type: 'items', collection: 'test', action: 'create', data: {} },
+			},
+			{} as EventContext,
+		);
+
+		await vi.runAllTimersAsync();
+
+		expect(createOne).not.toBeCalled();
+
+		expect(fakeClient.send).toBeCalledWith(
+			'{"type":"items","status":"error","error":{"code":"COLLECTION_INACTIVE","message":"Collection \\"test\\" is inactive."}}',
+		);
+	});
+});

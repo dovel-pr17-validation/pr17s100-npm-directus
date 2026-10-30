@@ -1,0 +1,386 @@
+import { defineInterface } from '@directus/extensions';
+import type { AppField, DeepPartial, Field } from '@directus/types';
+import { defineAsyncComponent } from 'vue';
+import PreviewSVG from './preview.svg?raw';
+import toolbarDefault from './toolbar-default';
+import { configurableRichTexts, contributedKey, enabledRichTexts, useRichTexts } from '@/rich-text/register';
+
+const InterfaceWYSIWYG = defineAsyncComponent(() => import('./input-rich-text-html.vue'));
+
+const enabledIds = (field: DeepPartial<Field>) => field.meta?.options?.['extensions'] as string[] | undefined;
+
+export default defineInterface({
+	id: 'input-rich-text-html',
+	name: '$t:interfaces.input-rich-text-html.wysiwyg',
+	description: '$t:interfaces.input-rich-text-html.description',
+	icon: 'format_quote',
+	component: InterfaceWYSIWYG,
+	types: ['text'],
+	group: 'standard',
+	preview: PreviewSVG,
+	options: ({ field }) => ({
+		standard: [
+			// Only rendered when something is installed: an empty multi-select would confuse every
+			// other project.
+			...(useRichTexts().value.length > 0
+				? [
+						{
+							field: 'extensions',
+							name: '$t:interfaces.input-rich-text-html.extensions',
+							type: 'json',
+							schema: {
+								// nothing is on by default: installing an extension must not change an existing field
+								default_value: [],
+							},
+							meta: {
+								width: 'half',
+								interface: 'select-multiple-dropdown',
+								note: '$t:interfaces.input-rich-text-html.extensions_note',
+								options: {
+									choices: useRichTexts().value.map(({ id, name }) => ({ value: id, text: name })),
+									placeholder: '$t:interfaces.input-rich-text-html.extensions_placeholder',
+								},
+							},
+						} satisfies DeepPartial<AppField>,
+					]
+				: []),
+			{
+				field: 'toolbar',
+				name: '$t:interfaces.input-rich-text-html.toolbar',
+				type: 'json',
+				schema: {
+					default_value: toolbarDefault,
+				},
+				meta: {
+					width: 'half',
+					interface: 'select-multiple-dropdown',
+					options: {
+						choices: [
+							{
+								value: 'undo',
+								text: '$t:wysiwyg_options.undo',
+							},
+							{
+								value: 'redo',
+								text: '$t:wysiwyg_options.redo',
+							},
+							{
+								value: 'bold',
+								text: '$t:wysiwyg_options.bold',
+							},
+							{
+								value: 'italic',
+								text: '$t:wysiwyg_options.italic',
+							},
+							{
+								value: 'underline',
+								text: '$t:wysiwyg_options.underline',
+							},
+							{
+								value: 'strikethrough',
+								text: '$t:wysiwyg_options.strikethrough',
+							},
+							{
+								value: 'subscript',
+								text: '$t:wysiwyg_options.subscript',
+							},
+							{
+								value: 'superscript',
+								text: '$t:wysiwyg_options.superscript',
+							},
+							{
+								value: 'fontfamily',
+								text: '$t:wysiwyg_options.fontselect',
+							},
+							{
+								value: 'fontsize',
+								text: '$t:wysiwyg_options.fontsizeselect',
+							},
+							{
+								value: 'h1',
+								text: '$t:wysiwyg_options.h1',
+							},
+							{
+								value: 'h2',
+								text: '$t:wysiwyg_options.h2',
+							},
+							{
+								value: 'h3',
+								text: '$t:wysiwyg_options.h3',
+							},
+							{
+								value: 'h4',
+								text: '$t:wysiwyg_options.h4',
+							},
+							{
+								value: 'h5',
+								text: '$t:wysiwyg_options.h5',
+							},
+							{
+								value: 'h6',
+								text: '$t:wysiwyg_options.h6',
+							},
+							{
+								value: 'customPre',
+								text: '$t:wysiwyg_options.pre',
+							},
+							{
+								value: 'alignleft',
+								text: '$t:wysiwyg_options.alignleft',
+							},
+							{
+								value: 'aligncenter',
+								text: '$t:wysiwyg_options.aligncenter',
+							},
+							{
+								value: 'alignright',
+								text: '$t:wysiwyg_options.alignright',
+							},
+							{
+								value: 'alignjustify',
+								text: '$t:wysiwyg_options.alignjustify',
+							},
+							{
+								value: 'alignnone',
+								text: '$t:wysiwyg_options.alignnone',
+							},
+							{
+								value: 'indent',
+								text: '$t:wysiwyg_options.indent',
+							},
+							{
+								value: 'outdent',
+								text: '$t:wysiwyg_options.outdent',
+							},
+							{
+								value: 'numlist',
+								text: '$t:wysiwyg_options.numlist',
+							},
+							{
+								value: 'bullist',
+								text: '$t:wysiwyg_options.bullist',
+							},
+							{
+								value: 'forecolor',
+								text: '$t:wysiwyg_options.forecolor',
+							},
+							{
+								value: 'backcolor',
+								text: '$t:wysiwyg_options.backcolor',
+							},
+							{
+								value: 'removeformat',
+								text: '$t:wysiwyg_options.removeformat',
+							},
+							{
+								value: 'cut',
+								text: '$t:wysiwyg_options.cut',
+							},
+							{
+								value: 'copy',
+								text: '$t:wysiwyg_options.copy',
+							},
+							{
+								value: 'paste',
+								text: '$t:wysiwyg_options.paste',
+							},
+							{
+								value: 'remove',
+								text: '$t:wysiwyg_options.remove',
+							},
+							{
+								value: 'selectall',
+								text: '$t:wysiwyg_options.selectall',
+							},
+							{
+								value: 'blockquote',
+								text: '$t:wysiwyg_options.blockquote',
+							},
+							{
+								value: 'customInlineCode',
+								text: '$t:wysiwyg_options.codeblock',
+							},
+							{
+								value: 'customLink',
+								text: '$t:wysiwyg_options.link',
+							},
+							{
+								value: 'unlink',
+								text: '$t:wysiwyg_options.unlink',
+							},
+							{
+								value: 'customImage',
+								text: '$t:wysiwyg_options.image',
+							},
+							{
+								value: 'customMedia',
+								text: '$t:wysiwyg_options.media',
+							},
+							{
+								value: 'table',
+								text: '$t:wysiwyg_options.table',
+							},
+							{
+								value: 'hr',
+								text: '$t:wysiwyg_options.hr',
+							},
+							// `preview` intentionally dropped — no content footprint, editor is already live-WYSIWYG.
+							{
+								value: 'pagebreak',
+								text: '$t:wysiwyg_options.pagebreak',
+							},
+							{
+								value: 'insertdatetime',
+								text: '$t:wysiwyg_options.insertdatetime',
+							},
+							{
+								value: 'fullscreen',
+								text: '$t:wysiwyg_options.fullscreen',
+							},
+							{
+								value: 'visualaid',
+								text: '$t:wysiwyg_options.visualaid',
+							},
+							{
+								value: 'ltr rtl',
+								text: '$t:wysiwyg_options.directionality',
+							},
+							{
+								value: 'code',
+								text: '$t:wysiwyg_options.source_code',
+							},
+							// Only the extensions this field switched on: a button whose node is not in
+							// the field's schema would do nothing. `options` is a function the app
+							// re-runs as the admin edits, so this list follows the picker above.
+							...enabledRichTexts(enabledIds(field), field.meta?.options?.['extensionOptions']).flatMap((config) =>
+								config.buttons.map((button) => ({
+									value: contributedKey(config, button),
+									text: button.label,
+								})),
+							),
+						],
+					},
+				},
+			},
+			...(configurableRichTexts(enabledIds(field)).length > 0
+				? [
+						{
+							field: 'extensionOptions',
+							name: '$t:interfaces.input-rich-text-html.extension_options',
+							type: 'json',
+							meta: {
+								width: 'full',
+								interface: 'system-richtext-extension-options',
+								options: { extensions: enabledIds(field) },
+							},
+						} satisfies DeepPartial<AppField>,
+					]
+				: []),
+			{
+				field: 'font',
+				name: '$t:font',
+				type: 'string',
+				meta: {
+					width: 'half',
+					interface: 'select-dropdown',
+					options: {
+						choices: [
+							{ text: '$t:sans_serif', value: 'sans-serif' },
+							{ text: '$t:monospace', value: 'monospace' },
+							{ text: '$t:serif', value: 'serif' },
+						],
+					},
+				},
+				schema: {
+					default_value: 'sans-serif',
+				},
+			},
+			{
+				field: 'folder',
+				name: '$t:folder',
+				type: 'uuid',
+				meta: {
+					width: 'half',
+					interface: 'system-folder',
+					note: '$t:interfaces.input-rich-text-html.folder_note',
+				},
+			},
+			{
+				field: 'imageToken',
+				name: '$t:interfaces.input-rich-text-html.imageToken',
+				type: 'string',
+				meta: {
+					note: '$t:interfaces.input-rich-text-html.imageToken_label',
+					width: 'half',
+					interface: 'input',
+				},
+			},
+		],
+		advanced: [
+			{
+				field: 'softLength',
+				name: '$t:soft_length',
+				type: 'integer',
+				meta: {
+					width: 'half',
+					interface: 'input',
+					options: {
+						placeholder: '255',
+						min: 1,
+					},
+				},
+			},
+			{
+				field: 'customFormats',
+				name: '$t:interfaces.input-rich-text-html.custom_formats',
+				type: 'json',
+				meta: {
+					interface: 'code',
+					note: '$t:interfaces.input-rich-text-html.custom_formats_note',
+					options: {
+						language: 'json',
+						template: JSON.stringify(
+							[
+								{
+									title: 'My Custom Format',
+									inline: 'span',
+									classes: 'custom-wrapper',
+									styles: { color: '#00ff00', 'font-size': '20px' },
+									attributes: { title: 'My Custom Wrapper' },
+								},
+								{
+									title: 'My Custom Block',
+									block: 'p',
+									classes: 'lead-paragraph',
+								},
+								{
+									title: 'My Custom Group',
+									items: [{ title: 'Subheading', selector: 'h2', classes: 'subheading' }],
+								},
+							],
+							null,
+							4,
+						),
+					},
+				},
+			},
+			// deprecated + inert; only rendered for fields that still carry a stored value
+			...(field.meta?.options?.['tinymceOverrides'] != null
+				? [
+						{
+							field: 'tinymceOverrides',
+							name: '$t:interfaces.input-rich-text-html.options_override',
+							type: 'json',
+							meta: {
+								interface: 'code',
+								note: '$t:interfaces.input-rich-text-html.options_override_note',
+								options: {
+									language: 'json',
+								},
+							},
+						} satisfies DeepPartial<AppField>,
+					]
+				: []),
+		],
+	}),
+});
